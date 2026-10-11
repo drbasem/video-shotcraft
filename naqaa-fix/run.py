@@ -5,7 +5,7 @@ cap=cv2.VideoCapture('src.mp4')
 W=int(cap.get(3)); H=int(cap.get(4))
 cmd=['ffmpeg','-v','error','-y','-f','rawvideo','-pix_fmt','bgr24','-s',f'{W}x{H}','-r','30','-i','-',
      '-i','src.mp4','-map','0:v','-map','1:a','-map','1:s?','-c:v','libx264','-crf','15','-preset','slow','-pix_fmt','yuv420p',
-     '-c:a','copy','-c:s','mov_text','-shortest','-movflags','+faststart','naqaa-clean.mp4']
+     '-c:a','copy','-c:s','mov_text','-movflags','+faststart','naqaa-clean.mp4']
 p=subprocess.Popen(cmd,stdin=subprocess.PIPE)
 ref=None;i=0
 while True:
