@@ -11,8 +11,6 @@ type Rect = {x: number; y: number; w: number; h: number};
 type Pt = [number, number];
 
 const P1: Pic = {src: 'img/p1.png', w: 941, h: 1672};
-const P2: Pic = {src: 'img/p2.png', w: 1224, h: 1285};
-const P3: Pic = {src: 'img/p3.png', w: 1224, h: 1285};
 const fit = (i: Pic) => W / i.w;
 const ease = Easing.inOut(Easing.cubic);
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -126,53 +124,6 @@ const Sparkles: React.FC<{g: number; area: Rect; n: number; seed: number}> = ({g
 };
 
 // ---------------------------------------------------------------------------
-// Camera shot: pan/zoom + gentle 3D orbit tilt, overlay lives in poster space
-// ---------------------------------------------------------------------------
-const Shot: React.FC<{img: Pic; keys: Key[]; start: number; zoomIsFit?: boolean; tilt?: number; overlay?: (g: number) => React.ReactNode}> = ({
-  img, keys, start, zoomIsFit, tilt = 1, overlay,
-}) => {
-  const frame = useCurrentFrame();
-  const g = frame + start;
-  const c = cam(keys, g);
-  const k = zoomIsFit ? c.k * fit(img) : c.k;
-  const m = 1.08; // overscan so the 3D tilt never exposes edges
-  const vw = (W / k) * m;
-  const vh = (H / k) * m;
-  const cl = (v: number, half: number, size: number) => (half * 2 <= size ? Math.min(Math.max(v, half), size - half) : size / 2);
-  const cx = cl(c.cx, vw / 2, img.w);
-  const cy = cl(c.cy, vh / 2, img.h);
-  const t = g / 30;
-  const ry = Math.sin(t * 0.9) * 3.2 * tilt;
-  const rx = Math.cos(t * 0.7) * 1.8 * tilt;
-  const rz = Math.sin(t * 0.5) * 0.7 * tilt;
-  return (
-    <AbsoluteFill style={{overflow: 'hidden', background: '#0a3a78', perspective: 1700}}>
-      <Img src={staticFile(img.src)} style={{position: 'absolute', left: -150, top: -150, width: W + 300, height: H + 300, objectFit: 'cover', filter: 'blur(40px)'}} />
-      <div style={{position: 'absolute', left: 0, top: 0, width: W, height: H, transformOrigin: '50% 50%',
-        transform: `rotateY(${ry}deg) rotateX(${rx}deg) rotateZ(${rz}deg) scale(${m})`}}>
-        <div style={{position: 'absolute', left: 0, top: 0, width: img.w, height: img.h, transformOrigin: '0 0',
-          transform: `translate(${W / 2 - cx * k}px, ${H / 2 - cy * k}px) scale(${k})`}}>
-          <Img src={staticFile(img.src)} style={{position: 'absolute', left: 0, top: 0, width: img.w, height: img.h}} />
-          {overlay ? overlay(g) : null}
-        </div>
-      </div>
-    </AbsoluteFill>
-  );
-};
-
-const Scene: React.FC<{from: number; to: number; fade?: number; children: React.ReactNode}> = ({from, to, fade = 12, children}) => {
-  const frame = useCurrentFrame();
-  const o = interpolate(frame, [from, from + fade, to - fade, to], [from === 0 ? 1 : 0, 1, 1, to >= TOTAL ? 1 : 0], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-  });
-  return (
-    <Sequence from={from} durationInFrames={to - from}>
-      <AbsoluteFill style={{opacity: o}}>{children}</AbsoluteFill>
-    </Sequence>
-  );
-};
-
-// ---------------------------------------------------------------------------
 // Screen-space layers
 // ---------------------------------------------------------------------------
 const Droplets: React.FC = () => {
@@ -231,126 +182,164 @@ const Caption: React.FC<{text: string; from: number; to: number; y: number; size
   );
 };
 
+// ---------------------------------------------------------------------------
+// Layered 2.5D rig: background / bottles / size pills are separate layers with
+// their own depth, so they genuinely move relative to each other.
+// ---------------------------------------------------------------------------
+const BG = 'layers/p1_bg.png';
+const BOTTLES: Rect[] = [{x: 167, y: 1033, w: 171, h: 380}, {x: 372, y: 937, w: 181, h: 481}, {x: 592, y: 778, w: 221, h: 635}];
+const PILLS: Rect[] = [{x: 165, y: 1427, w: 157, h: 46}, {x: 385, y: 1427, w: 158, h: 46}, {x: 622, y: 1427, w: 168, h: 46}];
+const B_DEPTH = [0.9, 1.0, 1.15];
+const PW = 941;
+const PH = 1672;
+const P1_WATERFALL: Pt[] = [[85, 775], [190, 790], [300, 900], [345, 1020], [330, 1060], [150, 1055], [100, 900]];
+
+// each bottle hops (start frames). A hop lasts 26 frames in the air, then squashes on landing.
+const HOPS: number[][] = [
+  [14, 300, 452],
+  [28, 350, 466],
+  [42, 396, 480],
+];
+const AIR = 26;
+
+const bottleMotion = (g: number, i: number) => {
+  let lift = 0, sq = 0, tilt = 0;
+  for (const h0 of HOPS[i]) {
+    const u = (g - h0) / AIR;
+    if (u >= 0 && u <= 1) { lift = Math.max(lift, 4 * u * (1 - u) * 85); tilt = Math.sin(u * Math.PI * 2) * (i % 2 ? -3 : 3); }
+    const d = g - (h0 + AIR);
+    if (d >= 0 && d < 40) sq += Math.exp(-d / 5) * Math.cos(d * 0.75);
+  }
+  const t = g / 30;
+  return {
+    lift, sy: 1 - 0.095 * sq, sx: 1 + 0.065 * sq,
+    rot: tilt + Math.sin(t * 1.2 + i * 1.7) * 1.3,
+    bob: Math.sin(t * 1.7 + i * 1.1) * 4,
+  };
+};
+
+const glintFrames = (i: number) => [...HOPS[i].map((h) => h + AIR + 3), 118 + i * 9, 218 + i * 9, 520 + i * 8];
+
+const Rig: React.FC<{keys: Key[]}> = ({keys}) => {
+  const g = useCurrentFrame();
+  const c = cam(keys, g);
+  const k = c.k * fit({src: BG, w: PW, h: PH});
+  const vw = W / k, vh = H / k;
+  const cl = (v: number, half: number, size: number) => (half * 2 <= size ? Math.min(Math.max(v, half), size - half) : size / 2);
+  const cx = cl(c.cx, vw / 2, PW);
+  const cy = cl(c.cy, vh / 2, PH);
+  const t = g / 30;
+  const base = (d: number) => {
+    const ex = d * (Math.sin(t * 0.8) * 11 + (cx - 470) * k * 0.035);
+    const ey = d * Math.cos(t * 0.6) * 5;
+    return `translate(${ex}px, ${ey}px) translate(${W / 2 - cx * k}px, ${H / 2 - cy * k}px) scale(${k})`;
+  };
+  const layer = (d: number): React.CSSProperties => ({position: 'absolute', left: 0, top: 0, width: PW, height: PH, transformOrigin: '0 0', transform: base(d)});
+  const landings = BOTTLES.flatMap((b, i) => HOPS[i].map((h0) => ({at: h0 + AIR, x: b.x + b.w / 2, y: b.y + b.h - 14, i})));
+  return (
+    <AbsoluteFill style={{overflow: 'hidden', background: '#0a3a78'}}>
+      {/* background plate */}
+      <div style={layer(0)}>
+        <Img src={staticFile(BG)} style={{position: 'absolute', left: 0, top: 0, width: PW, height: PH}} />
+        <WaterfallFlow g={g} poly={P1_WATERFALL} seed={3} w={PW} h={PH} />
+        <Sparkles g={g} area={{x: 330, y: 1040, w: 560, h: 110}} n={16} seed={5} />
+      </div>
+
+      {/* bottles */}
+      {BOTTLES.map((b, i) => {
+        const m = bottleMotion(g, i);
+        return (
+          <div key={i} style={layer(B_DEPTH[i])}>
+            <div style={{position: 'absolute', left: b.x, top: b.y, width: b.w, height: b.h, transformOrigin: '50% 100%',
+              transform: `translateY(${-m.lift + m.bob}px) rotate(${m.rot}deg) scale(${m.sx}, ${m.sy})`,
+              filter: m.lift > 8 ? 'drop-shadow(0 14px 14px rgba(0,40,100,0.25))' : undefined}}>
+              <Img src={staticFile(`layers/p1_b${i}.png`)} style={{position: 'absolute', inset: 0, width: '100%', height: '100%'}} />
+              {glintFrames(i).map((f) => {
+                const u = clamp01((g - f) / 28);
+                if (g < f || u >= 1) return null;
+                const p = -35 + u * 170;
+                const mask = `url(${staticFile(`layers/p1_b${i}.png`)})`;
+                return <div key={f} style={{position: 'absolute', inset: 0, mixBlendMode: 'screen', opacity: Math.sin(u * Math.PI),
+                  WebkitMaskImage: mask, maskImage: mask, WebkitMaskSize: '100% 100%', maskSize: '100% 100%',
+                  background: `linear-gradient(105deg, transparent ${p - 16}%, rgba(255,255,255,1) ${p}%, transparent ${p + 16}%)`}} />;
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* size pills (slightly nearer than the bottles) */}
+      {PILLS.map((p, i) => {
+        const m = bottleMotion(g, i);
+        return (
+          <div key={i} style={layer(0)}>
+            <Img src={staticFile(`layers/p1_pill${i}.png`)} style={{position: 'absolute', left: p.x, top: p.y, width: p.w, height: p.h,
+              transform: `scale(${1 + (m.sx - 1) * 0.6})`, transformOrigin: '50% 50%'}} />
+          </div>
+        );
+      })}
+
+      {/* splashes where the bottles land */}
+      <div style={layer(1.0)}>
+        {landings.map((l, n) => <Splash key={n} g={g} at={l.at} x={l.x} y={l.y} n={30} power={1.15} seed={l.i * 7 + n} />)}
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const KEYS: Key[] = [
+  {f: 0, cx: 470, cy: 1180, k: 1.12},
+  {f: 60, cx: 470, cy: 1150, k: 1.2},
+  {f: 100, cx: 470, cy: 1100, k: 1.26},
+  {f: 165, cx: 470, cy: 0, k: 1.5},      // crane up to the logo
+  {f: 205, cx: 470, cy: 0, k: 1.5},
+  {f: 248, cx: 470, cy: 700, k: 1.9},    // benefit icons
+  {f: 285, cx: 470, cy: 700, k: 1.9},
+  {f: 325, cx: 262, cy: 1230, k: 1.85},  // 50 ml
+  {f: 345, cx: 262, cy: 1230, k: 1.85},
+  {f: 375, cx: 462, cy: 1190, k: 1.8},   // 100 ml
+  {f: 390, cx: 462, cy: 1190, k: 1.8},
+  {f: 420, cx: 702, cy: 1100, k: 1.7},   // 200 ml
+  {f: 440, cx: 702, cy: 1100, k: 1.7},
+  {f: 495, cx: 470, cy: 1250, k: 1.14},  // wide, wave of hops
+  {f: 600, cx: 470, cy: 836, k: 1.0},    // final pull-back
+];
+
 const Sfx: React.FC<{f: number; src: string; v?: number; dur?: number}> = ({f, src, v = 0.7, dur = 120}) => (
   <Sequence from={f} durationInFrames={dur}><Audio src={staticFile(`sfx/${src}`)} volume={v} /></Sequence>
-);
-
-// ---------------------------------------------------------------------------
-// Camera plans + poster geometry
-// ---------------------------------------------------------------------------
-const A: Key[] = [
-  {f: 0, cx: 470, cy: 930, k: 1.38},
-  {f: 20, cx: 470, cy: 930, k: 1.38},
-  {f: 95, cx: 470, cy: 0, k: 1.1},
-  {f: 135, cx: 470, cy: 0, k: 1.04},
-  {f: 185, cx: 470, cy: 700, k: 1.9},
-  {f: 225, cx: 470, cy: 700, k: 1.9},
-  {f: 285, cx: 480, cy: 2000, k: 1.22},
-  {f: 345, cx: 520, cy: 2000, k: 1.32},
-];
-const B: Key[] = [
-  {f: 330, cx: 365, cy: 790, k: 1.93},
-  {f: 362, cx: 365, cy: 790, k: 1.93},
-  {f: 392, cx: 610, cy: 790, k: 1.93},
-  {f: 412, cx: 610, cy: 790, k: 1.93},
-  {f: 440, cx: 880, cy: 790, k: 1.93},
-  {f: 452, cx: 880, cy: 790, k: 1.93},
-];
-const D: Key[] = [
-  {f: 440, cx: 400, cy: 700, k: 1.93},
-  {f: 470, cx: 400, cy: 700, k: 1.93},
-  {f: 520, cx: 990, cy: 800, k: 1.93},
-  {f: 536, cx: 990, cy: 800, k: 1.93},
-];
-const E: Key[] = [
-  {f: 524, cx: 470, cy: 836, k: 1.18},
-  {f: 600, cx: 470, cy: 836, k: 1.0},
-];
-
-const P1_WATERFALL: Pt[] = [[85, 775], [190, 790], [300, 900], [345, 1020], [330, 1060], [150, 1055], [100, 900]];
-const P1_BOTTLES: Rect[] = [{x: 170, y: 1035, w: 165, h: 370}, {x: 375, y: 940, w: 175, h: 470}, {x: 595, y: 780, w: 215, h: 620}];
-const P1_BASES: Pt[] = [[252, 1395], [462, 1405], [702, 1400]];
-const P2_WATERFALL: Pt[] = [[90, 425], [150, 420], [235, 640], [245, 745], [120, 745], [70, 600]];
-const P2_BOTTLES: Rect[] = [{x: 262, y: 650, w: 205, h: 450}, {x: 488, y: 497, w: 230, h: 610}, {x: 748, y: 375, w: 270, h: 730}];
-const P2_BASES: Pt[] = [[365, 1085], [603, 1095], [880, 1095]];
-const P3_WATERFALL: Pt[] = [[10, 470], [80, 470], [160, 600], [165, 700], [40, 700], [10, 620]];
-const P3_BOTTLES: Rect[] = [{x: 105, y: 660, w: 165, h: 390}, {x: 278, y: 510, w: 185, h: 545}, {x: 475, y: 350, w: 215, h: 720}];
-const P3_BASES: Pt[] = [[185, 1040], [365, 1045], [585, 1050]];
-
-const overlayP1 = (g: number) => (
-  <>
-    <WaterfallFlow g={g} poly={P1_WATERFALL} seed={3} w={941} h={1672} />
-    <Sparkles g={g} area={{x: 330, y: 1040, w: 560, h: 110}} n={14} seed={5} />
-    {P1_BASES.map((p, i) => <Splash key={`s${i}`} g={g} at={274 + i * 5} x={p[0]} y={p[1]} seed={i + 1} />)}
-    {P1_BASES.map((p, i) => <Splash key={`t${i}`} g={g} at={322 + i * 5} x={p[0]} y={p[1]} n={16} power={0.7} seed={i + 9} />)}
-    {P1_BOTTLES.map((r, i) => <Glint key={i} g={g} rect={r} at={288 + i * 9} />)}
-  </>
-);
-const overlayP2 = (g: number) => (
-  <>
-    <WaterfallFlow g={g} poly={P2_WATERFALL} seed={11} w={1224} h={1285} />
-    <Sparkles g={g} area={{x: 520, y: 700, w: 700, h: 220}} n={16} seed={8} />
-    {[[340, 0], [370, 1], [402, 2]].map(([at, i]) => (
-      <Splash key={i} g={g} at={at} x={P2_BASES[i][0]} y={P2_BASES[i][1]} n={30} power={1.15} seed={i + 21} />
-    ))}
-    {P2_BOTTLES.map((r, i) => <Glint key={i} g={g} rect={r} at={[348, 378, 418][i]} radius={60} />)}
-  </>
-);
-const overlayP3 = (g: number) => (
-  <>
-    <WaterfallFlow g={g} poly={P3_WATERFALL} seed={17} w={1224} h={1285} />
-    <Sparkles g={g} area={{x: 480, y: 820, w: 700, h: 180}} n={14} seed={13} />
-    {P3_BASES.map((p, i) => <Splash key={i} g={g} at={444 + i * 6} x={p[0]} y={p[1]} n={22} seed={i + 31} />)}
-    {P3_BOTTLES.map((r, i) => <Glint key={i} g={g} rect={r} at={452 + i * 8} radius={55} />)}
-  </>
-);
-const overlayE = (g: number) => (
-  <>
-    <WaterfallFlow g={g} poly={P1_WATERFALL} seed={3} w={941} h={1672} />
-    <Sparkles g={g} area={{x: 330, y: 1040, w: 560, h: 110}} n={14} seed={5} />
-    {P1_BASES.map((p, i) => <Splash key={i} g={g} at={528 + i * 5} x={p[0]} y={p[1]} n={22} seed={i + 41} />)}
-    {P1_BOTTLES.map((r, i) => <Glint key={i} g={g} rect={r} at={540 + i * 8} />)}
-  </>
 );
 
 export const NaqaaAd: React.FC = () => {
   const frame = useCurrentFrame();
   const master = interpolate(frame, [TOTAL - 24, TOTAL], [1, 0], {extrapolateLeft: 'clamp'});
+  const landings = HOPS.flatMap((hs) => hs.map((h) => h + AIR)).sort((a, b) => a - b);
   return (
     <AbsoluteFill style={{background: '#0a3a78'}}>
       <style>{`
         @font-face{font-family:'CairoAr';font-weight:900;src:url(${staticFile('fonts/cairo-arabic-900-normal.woff2')}) format('woff2');}
         @font-face{font-family:'CairoAr';font-weight:700;src:url(${staticFile('fonts/cairo-arabic-700-normal.woff2')}) format('woff2');}
       `}</style>
-      <Scene from={0} to={345}><Shot img={P1} keys={A} start={0} zoomIsFit overlay={overlayP1} /></Scene>
-      <Scene from={330} to={452}><Shot img={P2} keys={B} start={330} overlay={overlayP2} /></Scene>
-      <Scene from={440} to={536}><Shot img={P3} keys={D} start={440} overlay={overlayP3} tilt={0.8} /></Scene>
-      <Scene from={524} to={TOTAL} fade={14}><Shot img={P1} keys={E} start={524} zoomIsFit overlay={overlayE} tilt={0.5} /></Scene>
-
+      <Rig keys={KEYS} />
       <SunRays />
       <Droplets />
-      <Flash at={92} />
-      <Flash at={330} />
-      <Flash at={440} />
-      <Flash at={524} />
+      <Flash at={108} />
+      <Flash at={210} />
+      <Flash at={430} />
       <AbsoluteFill style={{background: 'radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 62%, rgba(0,30,80,0.28) 100%)'}} />
 
-      <Caption text="من قلب الطبيعة…" from={4} to={44} y={700} size={60} />
-      <Caption text="ثلاثة أحجام.. نقاء واحد" from={270} to={330} y={745} size={56} />
-      <Caption text="حجم يناسب كل لحظة" from={450} to={526} y={70} size={62} />
+      <Caption text="ثلاثة أحجام.. نقاء واحد" from={296} to={372} y={90} size={60} />
+      <Caption text="حجم يناسب كل لحظة" from={374} to={444} y={90} size={60} />
 
       <AbsoluteFill style={{background: '#0a3a78', opacity: 1 - master}} />
 
-      <Sfx f={0} src="riser-cine.mp3" v={0.35} dur={100} />
-      <Sfx f={80} src="whoosh-big.mp3" v={0.6} />
-      <Sfx f={178} src="swoosh-slow.mp3" v={0.45} />
-      <Sfx f={272} src="water-splash.mp3" v={0.8} />
-      <Sfx f={326} src="swoosh-slow.mp3" v={0.5} />
-      <Sfx f={340} src="water-splash.mp3" v={0.55} dur={60} />
-      <Sfx f={436} src="whoosh-big.mp3" v={0.45} />
-      <Sfx f={444} src="water-splash.mp3" v={0.5} dur={60} />
-      <Sfx f={520} src="shimmer-sparkle-sweep.mp3" v={0.6} />
-      <Sfx f={548} src="sparkle.mp3" v={0.5} dur={50} />
+      <Sfx f={0} src="riser-cine.mp3" v={0.3} dur={90} />
+      {landings.map((l, n) => <Sfx key={n} f={l - 2} src="water-splash.mp3" v={0.5} dur={50} />)}
+      <Sfx f={104} src="whoosh-big.mp3" v={0.55} />
+      <Sfx f={205} src="swoosh-slow.mp3" v={0.45} />
+      <Sfx f={290} src="swoosh-slow.mp3" v={0.4} />
+      <Sfx f={428} src="whoosh-big.mp3" v={0.45} />
+      <Sfx f={540} src="shimmer-sparkle-sweep.mp3" v={0.6} />
+      <Sfx f={560} src="sparkle.mp3" v={0.5} dur={50} />
     </AbsoluteFill>
   );
 };
