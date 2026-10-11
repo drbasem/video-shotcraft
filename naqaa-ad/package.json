@@ -1,0 +1,3 @@
+{"name":"naqaa-ad","private":true,"scripts":{"render":"remotion render src/index.ts NaqaaAd out/naqaa-ad.mp4"},
+"dependencies":{"@remotion/cli":"4.0.484","react":"19.2.7","react-dom":"19.2.7","remotion":"4.0.484"},
+"devDependencies":{"@types/react":"19.2.17","typescript":"6.0.3"}}
