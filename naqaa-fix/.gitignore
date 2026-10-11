@@ -1,0 +1,5 @@
+*.mp4
+*.png
+*.srt
+fr/
+__pycache__/
